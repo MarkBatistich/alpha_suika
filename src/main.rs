@@ -202,7 +202,7 @@ fn setup(
 
 fn spawn_fruit(
     mut commands: Commands,
-    mut fruit_iterator: Mut<'_, FruitIterator>,
+    fruit_iterator: &mut Mut<'_, FruitIterator>,
     player_translation: Vec3,
     asset_server: Res<AssetServer>,
 ){
@@ -251,11 +251,11 @@ fn spawn_fruit(
 fn input_handler(
     input: Res<Input<KeyCode>>,
     time_step: Res<FixedTime>,
-    mut query: Query<(&mut Transform, &mut FruitIterator), With<Player>>,
+    mut query: Query<(&mut Transform, &mut FruitIterator, &mut Sprite), With<Player>>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
 ){
-    let (mut player_transform, mut fruit_iterator) = query.single_mut();
+    let (mut player_transform, mut fruit_iterator, mut sprite ) = query.single_mut();
     
     let mut direction: f32 = 0.0;
     if input.pressed(KeyCode::A){
@@ -265,7 +265,10 @@ fn input_handler(
         direction += 1.0;
     }
     if input.just_pressed(KeyCode::Space) {
-        spawn_fruit(commands,fruit_iterator, player_transform.translation, asset_server);
+        spawn_fruit(commands, &mut fruit_iterator, player_transform.translation, asset_server);
+        sprite.custom_size = Some(Vec2::splat(2.0*FRUIT_RADII[fruit_iterator.next_group as usize]));
+        sprite.color = Color::hsla(FRUIT_HUE[fruit_iterator.next_group as usize], 0.9, 0.6, 1.0);
+
     }
 
     let new_x: f32 = player_transform.translation.x + direction * PLAYER_SPEED * time_step.period.as_secs_f32();
