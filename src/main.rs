@@ -1,53 +1,38 @@
 use bevy::prelude::*;
 use bevy::math::*;
-use bevy::window::WindowResized;
-use bevy::sprite::MaterialMesh2dBundle;
 use rand::Rng;
 use std::f32::consts::*;
 
 // constants
 const PLAYER_SPEED: f32 = 400.0;
 const GRAVITY: f32 = 9.81 * 100.0;
-const BOUNCE_CONST: f32 = 0.2;
+const BOUNCE_CONST: f32 = 0.1;
 const RESPONSE_CONST: f32 = 1.0;
 const LINEAR_FRICTION_CONST: f32 = 0.95;
 const ROT_FRICTION_CONST: f32 = 0.20;
 const MARGIN:f32 = 2.0;
 
-const LEFT_WALL: f32 = -200.;
-const RIGHT_WALL: f32 = 200.;
-const BOTTOM_WALL: f32 = -300.;
-const TOP_WALL: f32 = 300.;
+const LEFT_WALL: f32 = -540.0/2.;
+const RIGHT_WALL: f32 = 540.0/2.;
+const BOTTOM_WALL: f32 = -600.0/2.;
+const TOP_WALL: f32 = 600.0/2.;
 const WALL_THICKNESS: f32 = 10.0;
 const WALL_COLOR: Color = Color::rgb(0.8, 0.8, 0.8);
 
 const FRUIT_N: usize = 11;
 const FRUIT_RADII: [f32; FRUIT_N] = [
-    10.0,
     20.0,
-    30.0,
+    25.0,
+    35.0,
     40.0,
     50.0,
     60.0,
-    70.0,
-    80.0,
-    90.0,
-    100.0,
-    110.0,
+    75.0,
+    95.0,
+    105.0,
+    115.0,
+    125.0,
 ];
-// const FRUIT_COLORS: [Color; FRUIT_N] = [
-//     Color::rgb(1.0, 0.0, 0.0),
-//     Color::rgb(1.0, 0.0, 0.0),
-//     Color::rgb(1.0, 0.0, 0.0),
-//     Color::rgb(1.0, 0.0, 0.0),
-//     Color::rgb(1.0, 0.0, 0.0),
-//     Color::rgb(1.0, 0.0, 0.0),
-//     Color::rgb(1.0, 0.0, 0.0),
-//     Color::rgb(1.0, 0.0, 0.0),
-//     Color::rgb(1.0, 0.0, 0.0),
-//     Color::rgb(1.0, 0.0, 0.0),
-//     Color::rgb(1.0, 0.0, 0.0),
-// ];
 const FRUIT_HUE: [f32; FRUIT_N] = [
     0.0,
     10.0,
@@ -85,23 +70,10 @@ struct Fruit {
     color: Color,
 }
 
-// impl Fruit{
-//     fn setVelocity(Vec2, )
-//     {
-//         position_last = position - (v * dt);
-//     }
-// }
-
 #[derive(Component)]
 struct Player;
-// struct Player {
-    // pos: Pos,
-    // fruit: Fruit,
-// }
 
 // Wall code from Rust Brick Breaker example
-#[derive(Component)]
-struct Collider;
 enum WallLocation {
     Left,
     Right,
@@ -141,7 +113,6 @@ struct WallBundle {
     // You can nest bundles inside of other bundles like this
     // Allowing you to compose their functionality
     sprite_bundle: SpriteBundle,
-    collider: Collider,
 }
 
 impl WallBundle {
@@ -166,7 +137,6 @@ impl WallBundle {
                 },
                 ..default()
             },
-            collider: Collider,
         }
     }
 }
@@ -181,6 +151,7 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(FixedUpdate, (
             input_handler, 
+            apply_merges,
             apply_gravity,
             apply_collisions,
             apply_constraint,
@@ -191,27 +162,34 @@ fn main() {
 
 }
 
-fn setup(mut commands: Commands){
+fn setup(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+){
     let mut rng = rand::thread_rng();
+    let starting_group: u8 = rng.gen_range(0..5);
+    let fruit_icon = asset_server.load("fruit_icon.png");
     commands.spawn(Camera2dBundle::default());
     commands.spawn((
         SpriteBundle{
             transform: Transform { 
                 translation: vec3(0.0, TOP_WALL, 0.0),
+                rotation: Quat::from_rotation_z(FRAC_PI_4), // 45 degree rotation
                 ..default()
                 // rotation: (), scale: () 
             },
-            sprite: Sprite{
-                color: Color::rgb(0.3, 0.3, 0.7),
-                custom_size: Some(Vec2::new(20.0, 20.0)),
+            sprite: Sprite {
+                custom_size: Some(Vec2::splat(2.0*FRUIT_RADII[starting_group as usize])),
+                color: Color::hsla(FRUIT_HUE[starting_group as usize], 0.9, 0.6, 1.0),
                 ..default()
             },
+            texture: fruit_icon.clone(),
             ..default()
         },
         Player,
         FruitIterator{
             next_id: 0,
-            next_group: rng.gen_range(0..5),
+            next_group: starting_group,
         },
     ));
 
@@ -224,8 +202,6 @@ fn setup(mut commands: Commands){
 
 fn spawn_fruit(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
     mut fruit_iterator: Mut<'_, FruitIterator>,
     player_translation: Vec3,
     asset_server: Res<AssetServer>,
@@ -233,16 +209,6 @@ fn spawn_fruit(
     let fruit_icon = asset_server.load("fruit_icon.png");
     let mut rng = rand::thread_rng();
     commands.spawn((
-        // MaterialMesh2dBundle {
-        //     transform: Transform { 
-        //         translation: vec3(player_translation.x, player_translation.y, 0.0),
-        //         ..default()
-        //         // rotation: (), scale: () 
-        //     },
-        //     mesh: meshes.add(shape::Circle::new(FRUIT_RADII[fruit_iterator.next_group as usize]).into()).into(),
-        //     material: materials.add(ColorMaterial::from(FRUIT_COLORS[fruit_iterator.next_group as usize])),
-        //     ..default()
-        // },
         SpriteBundle {
             sprite: Sprite {
                 custom_size: Some(Vec2::splat(2.0*FRUIT_RADII[fruit_iterator.next_group as usize])),
@@ -286,8 +252,6 @@ fn input_handler(
     input: Res<Input<KeyCode>>,
     time_step: Res<FixedTime>,
     mut query: Query<(&mut Transform, &mut FruitIterator), With<Player>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
 ){
@@ -301,7 +265,7 @@ fn input_handler(
         direction += 1.0;
     }
     if input.just_pressed(KeyCode::Space) {
-        spawn_fruit(commands, meshes, materials, fruit_iterator, player_transform.translation, asset_server);
+        spawn_fruit(commands,fruit_iterator, player_transform.translation, asset_server);
     }
 
     let new_x: f32 = player_transform.translation.x + direction * PLAYER_SPEED * time_step.period.as_secs_f32();
@@ -319,6 +283,83 @@ fn apply_gravity(
     }
 }
 
+fn apply_merges(
+    time_step: Res<FixedTime>,
+    // mut fruit_query: Query<&mut Fruit>,
+    mut fruit_query: Query<(Entity, &Fruit)>,
+    mut iterator_query: Query<(&mut Transform, &mut FruitIterator), With<Player>>,
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+){
+    let mut query_collect: Vec<_> = fruit_query.iter_mut().collect();
+    let (entities, fruits): (Vec<_>, Vec<_>) = query_collect.into_iter().unzip();
+
+    let (_, mut fruit_iterator) = iterator_query.single_mut();
+
+    let mut r_ij: Vec2 = Vec2::ZERO;
+    let mut cm_ij: Vec2 = Vec2::ZERO;
+    let mut r_ij_mag: f32 = 0.0;
+    let mut min_dist: f32 = 0.0;
+
+    if fruits.len() < 2{
+        return;
+    }
+
+    let fruit_icon = asset_server.load("fruit_icon.png");
+    for i in 0..(fruits.len()-1) {
+        for j in (i+1)..fruits.len() {
+            if fruits[i].group == fruits[j].group{
+                r_ij = fruits[j].pos - fruits[i].pos;
+                r_ij_mag = r_ij.length();
+                min_dist = fruits[j].radius + fruits[i].radius;
+                if r_ij_mag < min_dist{ // if collision
+                    commands.entity(entities[i]).despawn();
+                    commands.entity(entities[j]).despawn();
+                    
+                    cm_ij = (fruits[j].pos + fruits[i].pos) / 2.0;
+                    commands.spawn((
+                        SpriteBundle {
+                            sprite: Sprite {
+                                custom_size: Some(Vec2::splat(2.0*FRUIT_RADII[(fruits[i].group+1) as usize])),
+                                color: Color::hsla(FRUIT_HUE[(fruits[i].group+1) as usize], 0.9, 0.6, 1.0),
+                                ..default()
+                            },
+                            texture: fruit_icon.clone(),
+                            transform: Transform { 
+                                translation: vec3(cm_ij.x, cm_ij.y, 0.0),
+                                rotation: Quat::from_rotation_z(FRAC_PI_4), // 45 degree rotation
+                                ..default()
+                                // rotation: (), scale: () 
+                            },
+                            ..default()
+                        },
+                        Fruit{
+                            id: fruit_iterator.next_id,
+                            group: fruits[i].group+1,
+                            pos: Vec2{
+                                x: cm_ij.x,
+                                y: cm_ij.y,
+                            },
+                            pos_last: Vec2{
+                                x: cm_ij.x,
+                                y: cm_ij.y,
+                            },
+                            vel: Vec2::ZERO,
+                            acc: Vec2::ZERO,
+                            a_pos: FRAC_PI_4,
+                            a_vel: 0.0,
+                            a_acc: 0.0,
+                            color: Color::RED,
+                            radius: FRUIT_RADII[(fruits[i].group+1) as usize],
+                        },
+                    ));
+                    fruit_iterator.next_id += 1;
+                }
+            }
+        }
+    }
+}
+
 fn apply_collisions(
     time_step: Res<FixedTime>,
     mut fruit_query: Query<&mut Fruit>,
@@ -333,15 +374,17 @@ fn apply_collisions(
     let mut ratio_j: f32 = 0.0;
     let mut delta: f32 = 0.0;
     let dt = time_step.period.as_secs_f32();
+
     if fruits.len() < 2{
         return;
     }
+
     for i in 0..(fruits.len()-1) {
         for j in (i+1)..fruits.len() {
             r_ij = fruits[j].pos - fruits[i].pos;
             r_ij_mag = r_ij.length();
             min_dist = fruits[j].radius + fruits[i].radius;
-            if r_ij_mag < min_dist{
+            if r_ij_mag < min_dist{ // if collision
                 r_ij_hat = r_ij / r_ij_mag;
                 ratio_i = fruits[i].radius / min_dist;
                 ratio_j = fruits[j].radius / min_dist;
@@ -388,14 +431,6 @@ fn apply_constraint(
         }
     }
 
-    // for (auto& obj : m_objects) {
-    //     const sf::Vector2f v    = m_constraint_center - obj.position;
-    //     const float        dist = sqrt(v.x * v.x + v.y * v.y);
-    //     if (dist > (m_constraint_radius - obj.radius)) {
-    //         const sf::Vector2f n = v / dist;
-    //         obj.position = m_constraint_center - n * (m_constraint_radius - obj.radius);
-    //     }
-    // }
 }
 
 // fn physics_update(
@@ -432,95 +467,6 @@ fn physics_update(
     }
 
 }
-
-// fn calc_vel(
-//     time_step: Res<FixedTime>,
-//     mut fruit_query: Query<&mut Fruit>,
-//     wall_query: Query<(Entity, &Transform), With<Collider>>,
-// ){
-//     let dt = time_step.period.as_secs_f32();
-//     let mut accel = Vec2{
-//         x: 0.0,
-//         y: 0.0,
-//     };
-
-//     let mut fruits: Vec<_> = fruit_query.iter_mut().collect();
-//     let mut r_ij: Vec2 = Vec2::ZERO;
-//     let mut v_ij: Vec2 = Vec2::ZERO;
-
-//     let mut reflect_x = false;
-//     let mut reflect_y = false;
-//     let mut pos_vec: Vec3;
-
-//     for i in 0..fruits.len() {
-//         accel.x = 0.0;
-//         accel.y = -GRAVITY;
-
-//         // Check ball collisions
-//         for j in 0..fruits.len() {
-//             if i == j {
-//                 continue; // skip the same fruit
-//             }
-//             r_ij = fruits[j].pos - fruits[i].pos;
-//             v_ij = fruits[j].pos - fruits[i].pos;
-//             if r_ij.length() < (fruits[i].radius + fruits[j].radius){
-//                 accel += -NORMAL_CONST * r_ij.normalize() * v_ij.length();
-//                 println!("{:?}", accel);
-//             }
-//         }
-
-//         // Check wall collisions
-
-//         for (wall_entity, wall_transform) in &wall_query {
-//             let collision = collide(
-//                 Vec3::from((fruits[i].pos, 0.0)),
-//                 Vec2::splat(2.0*fruits[i].radius),
-//                 wall_transform.translation,
-//                 wall_transform.scale.truncate(),
-//             );
-
-//             if let Some(collision) = collision{
-//                 match collision {
-//                     Collision::Left => reflect_x = fruits[i].vel.x > 0.0,
-//                     Collision::Right => reflect_x = fruits[i].vel.x < 0.0,
-//                     Collision::Top => reflect_y = fruits[i].vel.y < 0.0,
-//                     Collision::Bottom => reflect_y = fruits[i].vel.y > 0.0,
-//                     Collision::Inside => { /* do nothing */ }
-//                 }
-//             }
-//         }
-
-//         if reflect_x{
-//             fruits[i].vel.x = -(fruits[i].vel.x * NORMAL_CONST);
-//             accel.x = 0.0;
-//         }
-//         if reflect_y{
-//             fruits[i].vel.y = -(fruits[i].vel.y * NORMAL_CONST);
-//             accel.y = 0.0;
-//         }
-
-//         // if fruits[i].pos.y < -200.0{
-//         //     accel.y = NORMAL_CONST * (-fruits[i].pos.y - 400.0);
-//         //     fruits[i].vel.y = -(fruits[i].vel.y * NORMAL_CONST);
-//         // }
-
-//         fruits[i].vel += dt * accel;
-//         // println!("{:?}", accel);
-//         // println!("{:?}", fruits[i].pos);
-//     }
-// }
-
-// fn calc_pos(
-//     time_step: Res<FixedTime>,
-//     mut query: Query<&mut Fruit>,
-// ){
-//     let dt = time_step.period.as_secs_f32();
-
-//     for mut fruit_i in query.iter_mut(){
-//         fruit_i.pos.x += dt * fruit_i.vel.x;
-//         fruit_i.pos.y += dt * fruit_i.vel.y;
-//     }
-// }
 
 fn update_sprites(
     mut query: Query<(&mut Transform, &Fruit)>,
