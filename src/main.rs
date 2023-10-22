@@ -2,22 +2,33 @@ use bevy::prelude::*;
 use bevy::math::*;
 use rand::Rng;
 use std::f32::consts::*;
+use bevy::time::Stopwatch;
+use std::time::Duration;
 
 // constants
 const PLAYER_SPEED: f32 = 400.0;
 const GRAVITY: f32 = 9.81 * 100.0;
-const BOUNCE_CONST: f32 = 0.1;
-const RESPONSE_CONST: f32 = 1.0;
+const WALL_BOUNCE_CONST: f32 = 0.4;
+const POS_RESPONSE_CONST: f32 = 1.0;
+const VEL_RESPONSE_CONST: f32 = 0.01;
 const LINEAR_FRICTION_CONST: f32 = 0.95;
 const ROT_FRICTION_CONST: f32 = 0.20;
 const MARGIN:f32 = 2.0;
+const SPAWN_INTERVAL: f32 = 0.5;
 
 const LEFT_WALL: f32 = -540.0/2.;
 const RIGHT_WALL: f32 = 540.0/2.;
-const BOTTOM_WALL: f32 = -600.0/2.;
-const TOP_WALL: f32 = 600.0/2.;
+const BOTTOM_WALL: f32 = -700.0/2.;
+const TOP_WALL: f32 = 500.0/2.;
 const WALL_THICKNESS: f32 = 10.0;
 const WALL_COLOR: Color = Color::rgb(0.8, 0.8, 0.8);
+
+const SCOREBOARD_FONT_SIZE: f32 = 40.0;
+const SCOREBOARD_TEXT_PADDING: Val = Val::Px(5.0);
+const SCORE_COLOR: Color = Color::rgb(1.0, 0.5, 0.5);
+
+const BACKGROUND_COLOR: Color = Color::rgb(0.9, 0.9, 0.9);
+const TEXT_COLOR: Color = Color::rgb(0.5, 0.5, 1.0);
 
 const FRUIT_N: usize = 11;
 const FRUIT_RADII: [f32; FRUIT_N] = [
@@ -46,6 +57,19 @@ const FRUIT_HUE: [f32; FRUIT_N] = [
     90.0,
     100.0,
 ];
+const FRUIT_SCORE: [u32; FRUIT_N] = [
+    1,
+    3,
+    6,
+    10,
+    15,
+    21,
+    28,
+    36,
+    45,
+    55,
+    0, // Cant combine two watermelons
+];
 
 
 
@@ -61,13 +85,35 @@ struct Fruit {
     group: u8, // in range 0..=11
     pos: Vec2,
     pos_last: Vec2,
-    vel: Vec2,
+    // vel: Vec2,
     acc: Vec2,
     a_pos: f32,
-    a_vel: f32,
+    a_pos_last: f32,
+    // a_vel: f32,
     a_acc: f32,
     radius: f32,
     color: Color,
+}
+
+impl Fruit {
+    fn get_vel(&self, dt: f32) -> Vec2 {
+        return (self.pos - self.pos_last) / dt;
+    }
+    fn set_vel(&mut self, dt: f32, new_velocity: Vec2){
+        self.pos_last = self.pos - (new_velocity * dt);
+    }
+    fn inc_vel(&mut self, dt: f32, inc_velocity: Vec2){
+        self.pos_last = self.pos_last - (inc_velocity * dt);
+    }
+    fn get_a_vel(&self, dt: f32) -> f32 {
+        return (self.a_pos - self.a_pos_last) / dt;
+    }
+    fn set_a_vel(&mut self, dt: f32, new_a_velocity: f32){
+        self.a_pos_last = self.a_pos - (new_a_velocity * dt);
+    }
+    fn inc_a_vel(&mut self, dt: f32, inc_a_velocity: f32){
+        self.pos_last = self.pos_last - (inc_a_velocity * dt);
+    }
 }
 
 #[derive(Component)]
@@ -84,8 +130,8 @@ enum WallLocation {
 impl WallLocation {
     fn position(&self) -> Vec2 {
         match self {
-            WallLocation::Left => Vec2::new(LEFT_WALL, 0.),
-            WallLocation::Right => Vec2::new(RIGHT_WALL, 0.),
+            WallLocation::Left => Vec2::new(LEFT_WALL, (TOP_WALL+BOTTOM_WALL) / 2.0),
+            WallLocation::Right => Vec2::new(RIGHT_WALL, (TOP_WALL+BOTTOM_WALL) / 2.0),
             WallLocation::Bottom => Vec2::new(0., BOTTOM_WALL),
             WallLocation::Top => Vec2::new(0., TOP_WALL),
         }
@@ -141,13 +187,27 @@ impl WallBundle {
     }
 }
 
+#[derive(Resource)]
+struct Scoreboard {
+    score: u32,
+}
+
+#[derive(Component)]
+struct FruitSpawnTimer {
+    timer: Stopwatch,
+}
 
 fn main() {
     
     App::new()
         .add_plugins(DefaultPlugins)
-        .insert_resource(ClearColor(Color::rgb(0.9, 0.9, 0.9)))
-        .add_systems(Update, bevy::window::close_on_esc)
+        .insert_resource(ClearColor(BACKGROUND_COLOR))
+        .insert_resource(Scoreboard { score: 0 })
+        .add_systems(Update, (
+            bevy::window::close_on_esc,
+            update_sprites,
+            update_scoreboard,
+        ))
         .add_systems(Startup, setup)
         .add_systems(FixedUpdate, (
             input_handler, 
@@ -156,9 +216,7 @@ fn main() {
             apply_collisions,
             apply_constraint,
             physics_update,
-            update_sprites,
-        ))
-        .run();
+        )).run();
 
 }
 
@@ -170,10 +228,13 @@ fn setup(
     let starting_group: u8 = rng.gen_range(0..5);
     let fruit_icon = asset_server.load("fruit_icon.png");
     commands.spawn(Camera2dBundle::default());
+
+    let mut spawn_timer = Stopwatch::new();
+    spawn_timer.set_elapsed(Duration::from_secs_f32(SPAWN_INTERVAL));
     commands.spawn((
         SpriteBundle{
             transform: Transform { 
-                translation: vec3(0.0, TOP_WALL, 0.0),
+                translation: vec3(0.0, TOP_WALL+50.0, 0.0),
                 rotation: Quat::from_rotation_z(FRAC_PI_4), // 45 degree rotation
                 ..default()
                 // rotation: (), scale: () 
@@ -191,12 +252,39 @@ fn setup(
             next_id: 0,
             next_group: starting_group,
         },
+        FruitSpawnTimer{
+            timer: spawn_timer,
+        },
     ));
 
     commands.spawn(WallBundle::new(WallLocation::Left));
     commands.spawn(WallBundle::new(WallLocation::Right));
     commands.spawn(WallBundle::new(WallLocation::Bottom));
-    // commands.spawn(WallBundle::new(WallLocation::Top));
+    commands.spawn(WallBundle::new(WallLocation::Top));
+
+    commands.spawn(
+        TextBundle::from_sections([
+            TextSection::new(
+                "Score: ",
+                TextStyle {
+                    font_size: SCOREBOARD_FONT_SIZE,
+                    color: TEXT_COLOR,
+                    ..default()
+                },
+            ),
+            TextSection::from_style(TextStyle {
+                font_size: SCOREBOARD_FONT_SIZE,
+                color: SCORE_COLOR,
+                ..default()
+            }),
+        ])
+        .with_style(Style {
+            position_type: PositionType::Absolute,
+            top: SCOREBOARD_TEXT_PADDING,
+            left: SCOREBOARD_TEXT_PADDING,
+            ..default()
+        }),
+    );
 
 }
 
@@ -235,10 +323,11 @@ fn spawn_fruit(
                 x: player_translation.x,
                 y: player_translation.y,
             },
-            vel: Vec2::ZERO,
+            // vel: Vec2::ZERO,
             acc: Vec2::ZERO,
             a_pos: FRAC_PI_4,
-            a_vel: 0.0,
+            a_pos_last: FRAC_PI_4,
+            // a_vel: 0.0,
             a_acc: 0.0,
             color: Color::RED,
             radius: FRUIT_RADII[fruit_iterator.next_group as usize],
@@ -251,12 +340,14 @@ fn spawn_fruit(
 fn input_handler(
     input: Res<Input<KeyCode>>,
     time_step: Res<FixedTime>,
-    mut query: Query<(&mut Transform, &mut FruitIterator, &mut Sprite), With<Player>>,
+    mut query: Query<(&mut Transform, &mut FruitIterator, &mut Sprite, &mut FruitSpawnTimer), With<Player>>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
 ){
-    let (mut player_transform, mut fruit_iterator, mut sprite ) = query.single_mut();
+    let (mut player_transform, mut fruit_iterator, mut sprite, mut spawn_timer) = query.single_mut();
     
+    spawn_timer.timer.tick(time_step.period);
+
     let mut direction: f32 = 0.0;
     if input.pressed(KeyCode::A){
         direction -= 1.0;
@@ -264,14 +355,24 @@ fn input_handler(
     if input.pressed(KeyCode::D){
         direction += 1.0;
     }
-    if input.just_pressed(KeyCode::Space) {
-        spawn_fruit(commands, &mut fruit_iterator, player_transform.translation, asset_server);
-        sprite.custom_size = Some(Vec2::splat(2.0*FRUIT_RADII[fruit_iterator.next_group as usize]));
+    if (spawn_timer.timer.elapsed() > Duration::from_secs_f32(SPAWN_INTERVAL)) {
         sprite.color = Color::hsla(FRUIT_HUE[fruit_iterator.next_group as usize], 0.9, 0.6, 1.0);
+        if input.pressed(KeyCode::Space) {
+            spawn_fruit(commands, &mut fruit_iterator, player_transform.translation, asset_server);
+            sprite.custom_size = Some(Vec2::splat(2.0*FRUIT_RADII[fruit_iterator.next_group as usize]));
+            sprite.color = Color::hsla(FRUIT_HUE[fruit_iterator.next_group as usize], 0.9, 0.6, 0.0);
+            spawn_timer.timer.reset();
+        }
 
     }
 
-    let new_x: f32 = player_transform.translation.x + direction * PLAYER_SPEED * time_step.period.as_secs_f32();
+    let mut new_x: f32 = player_transform.translation.x + direction * PLAYER_SPEED * time_step.period.as_secs_f32();
+
+    if new_x < (LEFT_WALL + FRUIT_RADII[fruit_iterator.next_group as usize] + WALL_THICKNESS/2.0){
+        new_x = LEFT_WALL + FRUIT_RADII[fruit_iterator.next_group as usize] + WALL_THICKNESS/2.0;
+    }else if new_x > (RIGHT_WALL - FRUIT_RADII[fruit_iterator.next_group as usize] - WALL_THICKNESS/2.0){
+        new_x = RIGHT_WALL - FRUIT_RADII[fruit_iterator.next_group as usize] - WALL_THICKNESS/2.0;
+    }
 
     player_transform.translation.x = new_x;
 }
@@ -293,14 +394,17 @@ fn apply_merges(
     mut iterator_query: Query<(&mut Transform, &mut FruitIterator), With<Player>>,
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    mut scoreboard: ResMut<Scoreboard>,
 ){
     let mut query_collect: Vec<_> = fruit_query.iter_mut().collect();
     let (entities, fruits): (Vec<_>, Vec<_>) = query_collect.into_iter().unzip();
+    let dt = time_step.period.as_secs_f32();
 
     let (_, mut fruit_iterator) = iterator_query.single_mut();
 
     let mut r_ij: Vec2 = Vec2::ZERO;
     let mut cm_ij: Vec2 = Vec2::ZERO;
+    let mut vm_ij: Vec2 = Vec2::ZERO;
     let mut r_ij_mag: f32 = 0.0;
     let mut min_dist: f32 = 0.0;
 
@@ -318,8 +422,11 @@ fn apply_merges(
                 if r_ij_mag < min_dist{ // if collision
                     commands.entity(entities[i]).despawn();
                     commands.entity(entities[j]).despawn();
+                    scoreboard.score += FRUIT_SCORE[fruits[i].group as usize];
                     
-                    cm_ij = (fruits[j].pos + fruits[i].pos) / 2.0;
+                    cm_ij = (fruits[j].pos + fruits[i].pos) / 2.0; // center of mass
+                    vm_ij = (fruits[j].get_vel(dt) + fruits[i].get_vel(dt)) / 2.0; // average velocity
+
                     commands.spawn((
                         SpriteBundle {
                             sprite: Sprite {
@@ -339,18 +446,13 @@ fn apply_merges(
                         Fruit{
                             id: fruit_iterator.next_id,
                             group: fruits[i].group+1,
-                            pos: Vec2{
-                                x: cm_ij.x,
-                                y: cm_ij.y,
-                            },
-                            pos_last: Vec2{
-                                x: cm_ij.x,
-                                y: cm_ij.y,
-                            },
-                            vel: Vec2::ZERO,
+                            pos: cm_ij,
+                            pos_last: cm_ij - vm_ij*dt,
+                            // vel: vm_ij,
                             acc: Vec2::ZERO,
                             a_pos: FRAC_PI_4,
-                            a_vel: 0.0,
+                            a_pos_last: FRAC_PI_4,
+                            // a_vel: 0.0,
                             a_acc: 0.0,
                             color: Color::RED,
                             radius: FRUIT_RADII[(fruits[i].group+1) as usize],
@@ -391,15 +493,21 @@ fn apply_collisions(
                 r_ij_hat = r_ij / r_ij_mag;
                 ratio_i = fruits[i].radius / min_dist;
                 ratio_j = fruits[j].radius / min_dist;
-                delta =  0.5 * RESPONSE_CONST * (r_ij_mag - min_dist);
+                delta =  0.5 * POS_RESPONSE_CONST * (r_ij_mag - min_dist);
 
                 fruits[i].pos += r_ij_hat * (ratio_j * delta);
                 fruits[j].pos -= r_ij_hat * (ratio_i * delta);
-                fruits[i].vel += r_ij_hat * (ratio_j * delta) / dt;
-                fruits[j].vel -= r_ij_hat * (ratio_i * delta) / dt;
+                fruits[i].inc_vel(dt, r_ij_hat * VEL_RESPONSE_CONST *(ratio_j * delta) / dt);
+                fruits[j].inc_vel(dt, - r_ij_hat * VEL_RESPONSE_CONST *(ratio_i * delta) / dt);
 
-                fruits[i].a_acc -= ROT_FRICTION_CONST * ratio_j *((fruits[i].vel - fruits[j].vel).perp_dot(r_ij_hat) + fruits[i].a_vel*fruits[i].radius - fruits[j].a_vel*fruits[j].radius);
-                fruits[j].a_acc += ROT_FRICTION_CONST * ratio_i *((fruits[i].vel - fruits[j].vel).perp_dot(r_ij_hat) + fruits[i].a_vel*fruits[i].radius - fruits[j].a_vel*fruits[j].radius);
+                // fruits[i].vel += r_ij_hat * (ratio_j * delta) / dt;
+                // fruits[j].vel -= r_ij_hat * (ratio_i * delta) / dt;
+
+                // fruits[i].a_acc -= ROT_FRICTION_CONST * ratio_j *((fruits[i].vel - fruits[j].vel).perp_dot(r_ij_hat) + fruits[i].a_vel*fruits[i].radius - fruits[j].a_vel*fruits[j].radius);
+                // fruits[j].a_acc += ROT_FRICTION_CONST * ratio_i *((fruits[i].vel - fruits[j].vel).perp_dot(r_ij_hat) + fruits[i].a_vel*fruits[i].radius - fruits[j].a_vel*fruits[j].radius);
+
+                // fruits[i].a_acc -= ROT_FRICTION_CONST * ratio_j *((fruits[i].vel - fruits[j].vel).perp_dot(r_ij_hat) + fruits[i].a_vel*fruits[i].radius - fruits[j].a_vel*fruits[j].radius);
+                // fruits[j].a_acc += ROT_FRICTION_CONST * ratio_i *((fruits[i].vel - fruits[j].vel).perp_dot(r_ij_hat) + fruits[i].a_vel*fruits[i].radius - fruits[j].a_vel*fruits[j].radius);
 
                 // println!("{:?}, {:?}", fruits[i].a_acc, fruits[j].a_acc);
             }
@@ -411,65 +519,89 @@ fn apply_constraint(
     time_step: Res<FixedTime>,
     mut fruit_query: Query<&mut Fruit>, 
 ){
-
+    let dt = time_step.period.as_secs_f32();
     let mut fruits: Vec<_> = fruit_query.iter_mut().collect();
+    let mut vel: Vec2;
+    let mut a_vel: f32;
     for i in 0..fruits.len() {
         if (fruits[i].pos.y - fruits[i].radius) < (BOTTOM_WALL + WALL_THICKNESS/2.0){
+            vel = fruits[i].get_vel(dt);
+            a_vel = fruits[i].get_a_vel(dt);
+
             fruits[i].pos.y = BOTTOM_WALL + WALL_THICKNESS/2.0 + fruits[i].radius;
-            fruits[i].vel.y = -fruits[i].vel.y * BOUNCE_CONST;
-            fruits[i].vel.x = fruits[i].vel.x * LINEAR_FRICTION_CONST;
-            fruits[i].a_acc += LINEAR_FRICTION_CONST * (-fruits[i].vel.x - fruits[i].a_vel*fruits[i].radius);
+            fruits[i].set_vel(dt, Vec2{x: vel.x * LINEAR_FRICTION_CONST, y: -vel.y * WALL_BOUNCE_CONST});
+            // fruits[i].vel.y = -fruits[i].vel.y * WALL_BOUNCE_CONST;
+            // fruits[i].vel.x = fruits[i].vel.x * LINEAR_FRICTION_CONST;
+            // fruits[i].a_acc += LINEAR_FRICTION_CONST * (-vel.x - a_vel*fruits[i].radius);
         }
         if (fruits[i].pos.x - fruits[i].radius) < (LEFT_WALL + WALL_THICKNESS/2.0){
+            vel = fruits[i].get_vel(dt);
+            a_vel = fruits[i].get_a_vel(dt);
+
             fruits[i].pos.x = LEFT_WALL + WALL_THICKNESS/2.0 + fruits[i].radius;
-            fruits[i].vel.x = -fruits[i].vel.x * BOUNCE_CONST;
-            fruits[i].vel.y = fruits[i].vel.y * LINEAR_FRICTION_CONST;
-            fruits[i].a_acc += LINEAR_FRICTION_CONST * (fruits[i].vel.y - fruits[i].a_vel*fruits[i].radius);
+            fruits[i].set_vel(dt, Vec2{x: -vel.x * WALL_BOUNCE_CONST, y: vel.y * LINEAR_FRICTION_CONST});
+            // fruits[i].vel.x = -fruits[i].vel.x * WALL_BOUNCE_CONST;
+            // fruits[i].vel.y = fruits[i].vel.y * LINEAR_FRICTION_CONST;
+            // fruits[i].a_acc += LINEAR_FRICTION_CONST * (vel.y - a_vel*fruits[i].radius);
         }
         if (fruits[i].pos.x + fruits[i].radius) > (RIGHT_WALL - WALL_THICKNESS/2.0){
+            vel = fruits[i].get_vel(dt);
+            a_vel = fruits[i].get_a_vel(dt);
+
             fruits[i].pos.x = RIGHT_WALL - WALL_THICKNESS/2.0 - fruits[i].radius;
-            fruits[i].vel.x = -fruits[i].vel.x * BOUNCE_CONST;
-            fruits[i].vel.y = fruits[i].vel.y * LINEAR_FRICTION_CONST;
-            fruits[i].a_acc += LINEAR_FRICTION_CONST * (-fruits[i].vel.y - fruits[i].a_vel*fruits[i].radius);
+            fruits[i].set_vel(dt, Vec2{x: -vel.x * WALL_BOUNCE_CONST, y: vel.y * LINEAR_FRICTION_CONST});
+            // fruits[i].vel.x = -fruits[i].vel.x * WALL_BOUNCE_CONST;
+            // fruits[i].vel.y = fruits[i].vel.y * LINEAR_FRICTION_CONST;
+            // fruits[i].a_acc += LINEAR_FRICTION_CONST * (-vel.y - a_vel*fruits[i].radius);
         }
     }
 
 }
 
-// fn physics_update(
-//     time_step: Res<FixedTime>,
-//     mut fruit_query: Query<&mut Fruit>, 
-// ){
-//     let dt = time_step.period.as_secs_f32();
-//     let mut displacement: Vec2 = Vec2::ZERO;
-//     for mut fruit_i in fruit_query.iter_mut(){
-//         displacement = fruit_i.pos - fruit_i.pos_last;
-//         fruit_i.pos_last = fruit_i.pos;
-//         fruit_i.pos = fruit_i.pos + displacement + fruit_i.acc * dt * dt;
-//         fruit_i.acc = Vec2::ZERO;
-//     }
-
-// }
-
+// Verlet Integration
 fn physics_update(
     time_step: Res<FixedTime>,
     mut fruit_query: Query<&mut Fruit>, 
 ){
     let dt = time_step.period.as_secs_f32();
+    let mut displacement: Vec2;
+    let mut a_displacement: f32;
     for mut fruit_i in fruit_query.iter_mut(){
-        fruit_i.vel.x += dt * fruit_i.acc.x;
-        fruit_i.vel.y += dt * fruit_i.acc.y;
-        fruit_i.a_vel += dt * fruit_i.a_acc;
-        fruit_i.pos.x += dt * fruit_i.vel.x;
-        fruit_i.pos.y += dt * fruit_i.vel.y;
-        fruit_i.a_pos += dt * fruit_i.a_vel;
+        displacement = fruit_i.pos - fruit_i.pos_last;
+        a_displacement = fruit_i.a_pos - fruit_i.a_pos_last;
 
-        fruit_i.acc.x = 0.0;
-        fruit_i.acc.y = 0.0;
+        fruit_i.pos_last = fruit_i.pos;
+        fruit_i.a_pos_last = fruit_i.a_pos;
+
+        fruit_i.pos = fruit_i.pos + displacement + fruit_i.acc * dt * dt;
+        fruit_i.a_pos = fruit_i.a_pos + a_displacement + fruit_i.a_acc * dt * dt;
+
+        fruit_i.acc = Vec2::ZERO;
         fruit_i.a_acc = 0.0;
     }
 
 }
+
+// Euler Integration
+// fn physics_update(
+//     time_step: Res<FixedTime>,
+//     mut fruit_query: Query<&mut Fruit>, 
+// ){
+//     let dt = time_step.period.as_secs_f32();
+//     for mut fruit_i in fruit_query.iter_mut(){
+//         fruit_i.vel.x += dt * fruit_i.acc.x;
+//         fruit_i.vel.y += dt * fruit_i.acc.y;
+//         fruit_i.a_vel += dt * fruit_i.a_acc;
+//         fruit_i.pos.x += dt * fruit_i.vel.x;
+//         fruit_i.pos.y += dt * fruit_i.vel.y;
+//         fruit_i.a_pos += dt * fruit_i.a_vel;
+
+//         fruit_i.acc.x = 0.0;
+//         fruit_i.acc.y = 0.0;
+//         fruit_i.a_acc = 0.0;
+//     }
+
+// }
 
 fn update_sprites(
     mut query: Query<(&mut Transform, &Fruit)>,
@@ -479,4 +611,12 @@ fn update_sprites(
         transform.translation.y = fruit.pos.y;
         transform.rotation = Quat::from_rotation_z(fruit.a_pos);
     }
+}
+
+fn update_scoreboard(
+    scoreboard: Res<Scoreboard>,
+     mut query: Query<&mut Text>
+) {
+    let mut text = query.single_mut();
+    text.sections[1].value = scoreboard.score.to_string();
 }
