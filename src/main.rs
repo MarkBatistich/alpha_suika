@@ -6,15 +6,17 @@ use bevy::time::Stopwatch;
 use std::time::Duration;
 
 // constants
-const PLAYER_SPEED: f32 = 400.0;
-const GRAVITY: f32 = 9.81 * 100.0;
+const PLAYER_SPEED: f32 = 600.0;
+const GRAVITY: f32 = 20.0 * 100.0;
 const WALL_BOUNCE_CONST: f32 = 0.4;
 const POS_RESPONSE_CONST: f32 = 1.0;
 const VEL_RESPONSE_CONST: f32 = 0.01;
 const LINEAR_FRICTION_CONST: f32 = 0.95;
 const ROT_FRICTION_CONST: f32 = 0.20;
 const MARGIN:f32 = 2.0;
-const SPAWN_INTERVAL: f32 = 0.5;
+const SPAWN_INTERVAL: f32 = 0.5; // seconds between spawning fruits
+const MAX_VEL: f32 = 800.0; // clamp velocity magnitude
+const MAX_A_VEL: f32 = 200.0; // clamp velocity magnitude
 
 const LEFT_WALL: f32 = -540.0/2.;
 const RIGHT_WALL: f32 = 540.0/2.;
@@ -241,7 +243,7 @@ fn setup(
             },
             sprite: Sprite {
                 custom_size: Some(Vec2::splat(2.0*FRUIT_RADII[starting_group as usize])),
-                color: Color::hsla(FRUIT_HUE[starting_group as usize], 0.9, 0.6, 1.0),
+                color: Color::hsla(FRUIT_HUE[starting_group as usize], 1.0, 0.6, 1.0),
                 ..default()
             },
             texture: fruit_icon.clone(),
@@ -300,7 +302,7 @@ fn spawn_fruit(
         SpriteBundle {
             sprite: Sprite {
                 custom_size: Some(Vec2::splat(2.0*FRUIT_RADII[fruit_iterator.next_group as usize])),
-                color: Color::hsla(FRUIT_HUE[fruit_iterator.next_group as usize], 0.9, 0.6, 1.0),
+                color: Color::hsla(FRUIT_HUE[fruit_iterator.next_group as usize], 1.0, 0.6, 1.0),
                 ..default()
             },
             texture: fruit_icon.clone(),
@@ -349,18 +351,18 @@ fn input_handler(
     spawn_timer.timer.tick(time_step.period);
 
     let mut direction: f32 = 0.0;
-    if input.pressed(KeyCode::A){
-        direction -= 1.0;
-    }
-    if input.pressed(KeyCode::D){
-        direction += 1.0;
-    }
     if (spawn_timer.timer.elapsed() > Duration::from_secs_f32(SPAWN_INTERVAL)) {
-        sprite.color = Color::hsla(FRUIT_HUE[fruit_iterator.next_group as usize], 0.9, 0.6, 1.0);
+        if input.pressed(KeyCode::A){
+            direction -= 1.0;
+        }
+        if input.pressed(KeyCode::D){
+            direction += 1.0;
+        }
+        sprite.color = Color::hsla(FRUIT_HUE[fruit_iterator.next_group as usize], 1.0, 0.6, 1.0);
         if input.pressed(KeyCode::Space) {
             spawn_fruit(commands, &mut fruit_iterator, player_transform.translation, asset_server);
             sprite.custom_size = Some(Vec2::splat(2.0*FRUIT_RADII[fruit_iterator.next_group as usize]));
-            sprite.color = Color::hsla(FRUIT_HUE[fruit_iterator.next_group as usize], 0.9, 0.6, 0.0);
+            sprite.color = Color::hsla(FRUIT_HUE[fruit_iterator.next_group as usize], 1.0, 0.6, 0.0);
             spawn_timer.timer.reset();
         }
 
@@ -431,7 +433,7 @@ fn apply_merges(
                         SpriteBundle {
                             sprite: Sprite {
                                 custom_size: Some(Vec2::splat(2.0*FRUIT_RADII[(fruits[i].group+1) as usize])),
-                                color: Color::hsla(FRUIT_HUE[(fruits[i].group+1) as usize], 0.9, 0.6, 1.0),
+                                color: Color::hsla(FRUIT_HUE[(fruits[i].group+1) as usize], 1.0, 0.6, 1.0),
                                 ..default()
                             },
                             texture: fruit_icon.clone(),
@@ -566,7 +568,14 @@ fn physics_update(
     let dt = time_step.period.as_secs_f32();
     let mut displacement: Vec2;
     let mut a_displacement: f32;
+    let mut vel: Vec2;
+
     for mut fruit_i in fruit_query.iter_mut(){
+        vel = fruit_i.get_vel(dt);
+        if vel.length() >= MAX_VEL{
+            fruit_i.set_vel(dt, vel.normalize() * MAX_VEL);
+        }
+
         displacement = fruit_i.pos - fruit_i.pos_last;
         a_displacement = fruit_i.a_pos - fruit_i.a_pos_last;
 
